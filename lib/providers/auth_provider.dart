@@ -1,21 +1,34 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../models/user.dart';
 import '../services/api_service.dart';
 
 class AuthProvider with ChangeNotifier {
   User? _user;
   final ApiService _apiService = ApiService();
+  final String baseUrl = 'http://10.0.2.2:8080';
 
   User? get user => _user;
   bool get isLoggedIn => _user != null;
 
-  // 로그인 처리
+  // [추가됨] 전문가 인증 신청 완료 시 호출 (로컬 상태 업데이트)
+  void markExpertRequested() {
+    if (_user != null) {
+      // certificatePath에 임시 값('pending')을 넣어 "심사 중" 상태임을 표시
+      _user = _user!.copyWith(certificatePath: 'pending_submitted');
+      notifyListeners(); // ProfileScreen에 즉시 업데이트 알림
+    }
+  }
+
+  // 로그인
   Future<void> login(String email, String password) async {
     try {
       _user = await _apiService.login(email, password);
-      notifyListeners(); // 화면 갱신 알림
+      notifyListeners();
     } catch (e) {
-      rethrow; // 에러를 UI로 넘김
+      rethrow;
     }
   }
 
@@ -25,8 +38,22 @@ class AuthProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // 회원가입 (상태 변경 없음, 통과만 시킴)
-  Future<void> signup(String email, String username, String phone, String password) async {
-    await _apiService.signup(email, username, phone, password);
+  // 회원가입
+  Future<void> signup({
+    required String email,
+    required String name,
+    required String username,
+    required String phone,
+    required String password,
+    File? certificateFile,
+  }) async {
+    await _apiService.signup(
+      email: email,
+      name: name,
+      username: username,
+      phone: phone,
+      password: password,
+      certificateFile: certificateFile,
+    );
   }
 }

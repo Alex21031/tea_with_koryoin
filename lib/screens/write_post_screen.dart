@@ -14,17 +14,22 @@ class _WritePostScreenState extends State<WritePostScreen> {
   final _titleCtrl = TextEditingController();
   final _contentCtrl = TextEditingController();
   final ApiService _apiService = ApiService();
-  
-  final List<String> _categories = ['전문가 게시판', '자유 게시판', '일자리 공고', '홍보 게시판'];
-  String _selectedCategory = '자유 게시판'; // 기본값을 안전하게 '자유 게시판'으로 설정
+
+  final Map<String, int> _boardIdMap = {
+    '전문가 게시판': 2,
+    '자유 게시판': 1,
+    '일자리 공고': 3,
+    '홍보 게시판': 4,
+  };
+
+  String _selectedCategory = '자유 게시판'; 
 
   bool _isLoading = false;
 
-  // 제출 버튼 활성화 여부 (제목, 내용이 있어야 함)
   bool get _canSubmit {
     return !_isLoading && 
-           _titleCtrl.text.isNotEmpty && 
-           _contentCtrl.text.isNotEmpty;
+           _titleCtrl.text.trim().isNotEmpty && 
+           _contentCtrl.text.trim().isNotEmpty;
   }
 
   void _submit() async {
@@ -35,10 +40,20 @@ class _WritePostScreenState extends State<WritePostScreen> {
 
     setState(() => _isLoading = true);
     try {
-      await _apiService.createPost(user.id, _titleCtrl.text, _contentCtrl.text, _selectedCategory);
+      int boardId = _boardIdMap[_selectedCategory]!; 
+      
+      print("📡 전송하는 게시판 ID: $boardId ($_selectedCategory)");
+
+      await _apiService.createPost(
+        title: _titleCtrl.text,
+        content: _contentCtrl.text,
+        authorId: int.parse(user.id),
+        boardId: boardId,
+      );
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('게시물이 등록되었습니다.')));
-      Navigator.pop(context);
+      Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('오류: $e')));
@@ -50,8 +65,8 @@ class _WritePostScreenState extends State<WritePostScreen> {
   @override
   void initState() {
     super.initState();
-    _titleCtrl.addListener(() => setState(() {}));
-    _contentCtrl.addListener(() => setState(() {}));
+    _titleCtrl.addListener(() { setState(() {}); });
+    _contentCtrl.addListener(() { setState(() {}); });
   }
 
   @override
@@ -66,7 +81,6 @@ class _WritePostScreenState extends State<WritePostScreen> {
     final user = Provider.of<AuthProvider>(context).user;
     if (user == null) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
-    // 현재 유저의 역할 확인 (없으면 일반 유저 취급)
     final bool isExpert = user.role == 'expert';
 
     return Scaffold(
@@ -82,7 +96,7 @@ class _WritePostScreenState extends State<WritePostScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 1. 게시판 선택 드롭다운
+            // 1. 게시판 선택
             const Text('게시판', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 12),
             Container(
@@ -96,47 +110,40 @@ class _WritePostScreenState extends State<WritePostScreen> {
                   value: _selectedCategory,
                   isExpanded: true,
                   icon: const Icon(Icons.keyboard_arrow_down, color: Colors.grey),
-                  // 항목 리스트 생성
-                  items: _categories.map((String category) {
-                    // 전문가 게시판이고, 내가 전문가가 아니면 -> 비활성화(enabled: false)
+                  // ✅ [수정 핵심] Map의 Key들을 직접 사용하여 드롭다운 아이템 생성
+                  items: _boardIdMap.keys.map((String category) {
+                    // 전문가 게시판은 전문가만 선택 가능
                     final bool isDisabled = (category == '전문가 게시판' && !isExpert);
                     
                     return DropdownMenuItem<String>(
                       value: category,
-                      enabled: !isDisabled, // 여기서 클릭 가능 여부 결정
+                      enabled: !isDisabled,
                       child: Row(
                         children: [
                           Text(
                             category,
                             style: TextStyle(
-                              // 비활성화되면 회색, 아니면 검은색
                               color: isDisabled ? Colors.grey[400] : Colors.grey[800],
-                              decoration: isDisabled ? TextDecoration.lineThrough : null, // 취소선 추가 (선택사항)
+                              decoration: isDisabled ? TextDecoration.lineThrough : null,
                             ),
                           ),
                           if (category == '전문가 게시판') ...[
                             const SizedBox(width: 8),
-                            Icon(
-                              Icons.lock, 
-                              size: 16, 
-                              color: isDisabled ? Colors.grey[400] : Colors.orangeAccent
-                            ),
+                            Icon(Icons.lock, size: 16, color: isDisabled ? Colors.grey[400] : Colors.orangeAccent),
                           ]
                         ],
                       ),
                     );
                   }).toList(),
                   onChanged: (String? newValue) {
-                    if (newValue != null) {
-                      setState(() => _selectedCategory = newValue);
-                    }
+                    if (newValue != null) setState(() => _selectedCategory = newValue);
                   },
                 ),
               ),
             ),
             const SizedBox(height: 20),
 
-            // 2. 제목 입력
+            // 2. 제목
             const Text('제목', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 12),
             TextField(
@@ -152,7 +159,7 @@ class _WritePostScreenState extends State<WritePostScreen> {
             ),
             const SizedBox(height: 24),
 
-            // 3. 내용 입력
+            // 3. 내용
             const Text('내용', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
             const SizedBox(height: 12),
             TextField(

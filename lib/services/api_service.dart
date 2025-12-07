@@ -1,10 +1,11 @@
 import 'dart:convert';
+import 'dart:io'; 
 import 'package:http/http.dart' as http;
 import '../models/user.dart';
 import '../models/post.dart';
 
 class ApiService {
-  // 안드로이드 에뮬레이터용 주소
+  // 안드로이드 에뮬레이터: 10.0.2.2, iOS: localhost, 실기기: PC IP
   static const String baseUrl = 'http://10.0.2.2:8080';
 
   // 헤더 생성 도우미
@@ -33,31 +34,52 @@ class ApiService {
   }
 
   // 회원가입
-  Future<void> signup(String email, String username, String phone, String password) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/auth/signup'),
-      headers: _headers(),
-      body: jsonEncode({
-        'email': email,
-        'username': username,
-        'phone': phone,
-        'password': password,
-      }),
-    );
+  Future<void> signup({
+    required String email,
+    required String name,
+    required String username,
+    required String phone,
+    required String password,
+    File? certificateFile,
+  }) async {
+    final url = Uri.parse('$baseUrl/auth/signup');
+    var request = http.MultipartRequest('POST', url);
+
+    request.fields['email'] = email;
+    request.fields['name'] = name;
+    request.fields['username'] = username;
+    request.fields['phone'] = phone;
+    request.fields['password'] = password;
+
+    if (certificateFile != null) {
+      request.files.add(await http.MultipartFile.fromPath(
+        'certificate', 
+        certificateFile.path,
+      ));
+    }
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
 
     if (response.statusCode != 201) {
-      throw Exception(jsonDecode(response.body)['error']);
+      final body = jsonDecode(response.body);
+      throw Exception(body['error'] ?? '회원가입 실패');
     }
   }
 
-  // 게시물 목록 조회
-  Future<List<Post>> getPosts(int page, {String? category, String? keyword}) async {
+  // 게시물 목록 조회 (유저 ID 필터 포함)
+  Future<List<Post>> getPosts(int page, {String? category, String? keyword, int? userId}) async {
     String url = '$baseUrl/posts?page=$page';
+    
     if (category != null && category.isNotEmpty) {
       url += '&category=$category';
     }
     if (keyword != null && keyword.isNotEmpty) {
       url += '&q=$keyword';
+    }
+    // 내 글 보기 기능용 파라미터
+    if (userId != null) {
+      url += '&user_id=$userId';
     }
 
     final response = await http.get(Uri.parse(url));
@@ -71,23 +93,30 @@ class ApiService {
     }
   }
 
-  // 게시물 작성 (카테고리 포함)
-  Future<void> createPost(int userId, String title, String content, String category) async {
+  // 게시물 작성
+  Future<void> createPost({
+    required String title,
+    required String content,
+    required int authorId,
+    required int boardId, 
+  }) async {
+    final url = Uri.parse('$baseUrl/posts');
     final response = await http.post(
-      Uri.parse('$baseUrl/posts/create'),
+      url,
       headers: _headers(),
       body: jsonEncode({
-        'user_id': userId,
+        'author_id': authorId,
         'title': title,
         'content': content,
-        'category': category,
+        'board_id': boardId,
       }),
     );
 
     if (response.statusCode == 403) {
-      throw Exception('전문가만 작성할 수 있는 게시판입니다.');
+      throw Exception('권한이 없습니다 (전문가 등급 필요).');
     } else if (response.statusCode != 201) {
-      throw Exception(jsonDecode(response.body)['error'] ?? '게시물 작성 실패');
+      final errorBody = jsonDecode(response.body);
+      throw Exception(errorBody['error'] ?? '게시물 작성 실패');
     }
   }
 
@@ -107,14 +136,19 @@ class ApiService {
     final response = await http.post(
       Uri.parse('$baseUrl/comments/create'),
       headers: _headers(),
-      body: jsonEncode({'post_id': postId, 'user_id': userId, 'content': content}),
+      body: jsonEncode({
+        'post_id': postId, 
+        'user_id': userId, 
+        'content': content
+      }),
     );
     if (response.statusCode != 201) throw Exception('댓글 작성 실패');
   }
 
-  // [중요] 사용자 정보 수정 (이 메서드가 닫는 괄호 안에 있어야 함)
+  // 사용자 정보 수정
   Future<User> updateUser({
     required int userId,
+    String? name,
     String? username,
     String? phone,
     String? currentPassword,
@@ -122,6 +156,7 @@ class ApiService {
   }) async {
     final body = {
       'user_id': userId,
+      if (name != null) 'name': name,
       if (username != null) 'username': username,
       if (phone != null) 'phone': phone,
       if (currentPassword != null) 'current_password': currentPassword,
@@ -141,4 +176,68 @@ class ApiService {
       throw Exception(jsonDecode(response.body)['error']);
     }
   }
-} 
+
+  // 전문가 인증 신청
+  Future<void> requestExpertVerification({
+    required int userId, 
+    required File file,
+    required String token,
+  }) async {
+    final url = Uri.parse('$baseUrl/expert/request');
+    var request = http.MultipartRequest('POST', url);
+    request.headers['Authorization'] = 'Bearer $token';
+    request.fields['user_id'] = userId.toString();
+    request.files.add(await http.MultipartFile.fromPath('certificate', file.path));
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode != 201) {
+      final body = jsonDecode(response.body);
+      throw Exception(body['error'] ?? '신청 실패');
+    }
+  }
+
+  // ✅ [수정 완료] 게시물 삭제 (클래스 내부로 이동됨)
+  Future<void> deletePost(int postId, int userId) async {
+    final response = await http.delete(
+      Uri.parse('$baseUrl/posts/delete'),
+      headers: _headers(),
+      body: jsonEncode({'post_id': postId, 'user_id': userId}),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('삭제 실패: ${response.body}');
+    }
+  }
+
+  // ✅ [수정 완료] 좋아요 토글 (클래스 내부로 이동됨)
+  Future<Map<String, dynamic>> likePost(int postId, int userId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/posts/like'),
+      headers: _headers(),
+      body: jsonEncode({'post_id': postId, 'user_id': userId}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body); 
+    } else {
+      throw Exception('좋아요 요청 실패');
+    }
+  }
+
+
+  Future<Map<String, dynamic>> checkLikeStatus(int postId, int userId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/posts/check_like'),
+      headers: _headers(),
+      body: jsonEncode({'post_id': postId, 'user_id': userId}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body); // {'is_liked': true, 'like_count': 5}
+    } else {
+      throw Exception('좋아요 상태 확인 실패');
+    }
+  }
+}
