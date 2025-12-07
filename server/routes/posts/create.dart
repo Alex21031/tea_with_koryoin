@@ -17,6 +17,7 @@ Future<Response> onRequest(RequestContext context) async {
     final userId = body['user_id'] as int?;
     final title = body['title'] as String?;
     final content = body['content'] as String?;
+    final category = body['category'] as String? ?? 'free'; 
 
     if (userId == null || title == null || content == null) {
       return Response.json(
@@ -32,16 +33,18 @@ Future<Response> onRequest(RequestContext context) async {
       );
     }
 
+    // [수정 2] SQL 쿼리에 category 컬럼과 값을 추가했습니다.
     final result = await pool.execute(
       Sql.named('''
-        INSERT INTO posts (user_id, title, content, created_at)
-        VALUES (@user_id, @title, @content, NOW())
-        RETURNING id, title, content, created_at
+        INSERT INTO posts (user_id, title, content, category, created_at)
+        VALUES (@user_id, @title, @content, @category, NOW())
+        RETURNING id, title, content, category, created_at
       '''),
       parameters: {
         'user_id': userId,
         'title': title,
         'content': content,
+        'category': category, // [수정 3] 파라미터에 카테고리 추가
       },
     );
 
@@ -56,7 +59,8 @@ Future<Response> onRequest(RequestContext context) async {
           'id': post[0],
           'title': post[1],
           'content': post[2],
-          'created_at': post[3].toString(),
+          'category': post[3], // 응답에도 카테고리 포함
+          'created_at': post[4].toString(),
         },
       },
     );

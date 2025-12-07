@@ -1,84 +1,97 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:dart_frog/dart_frog.dart';
 import 'package:postgres/postgres.dart';
 import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 
 Future<Response> onRequest(RequestContext context) async {
+  // 1. POST 메서드 확인
   if (context.request.method != HttpMethod.post) {
+    return Response.json(statusCode: 405, body: {'error': 'Method not allowed'});
+  }
+
+  // 2. Multipart 요청인지 확인
+  final contentType = context.request.headers['content-type'] ?? '';
+  if (!contentType.contains('multipart/form-data')) {
     return Response.json(
-      statusCode: 405,
-      body: {'error': 'Method not allowed'},
+      statusCode: 400, 
+      body: {'error': 'Content-Type must be multipart/form-data'}
     );
   }
 
   try {
     final pool = context.read<Pool>();
-    final body = await context.request.json() as Map<String, dynamic>;
 
-    final email = body['email'] as String?;
-    final password = body['password'] as String?;
-    final username = body['username'] as String?;
-    final phone = body['phone'] as String?;
+    // 3. FormData 파싱
+    final formData = await context.request.formData();
+    final fields = formData.fields;
+    final files = formData.files;
 
-    if (email == null || password == null || username == null || phone == null) {
+    // 데이터 추출
+    final email = fields['email'];
+    final password = fields['password'];
+    final username = fields['username']; // 사용자명(닉네임)
+    final phone = fields['phone'];
+    final name = fields['name']; // 실명
+    
+    // 파일 추출 (키값: 'certificate')
+    final uploadedFile = files['certificate']; 
+
+    // 4. 필수값 검증
+    if (email == null || password == null || username == null || phone == null || name == null) {
       return Response.json(
         statusCode: 400,
-        body: {'error': '이메일, 비밀번호, 사용자명, 전화번호는 필수입니다.'},
+        body: {'error': '이메일, 비밀번호, 이름, 사용자명, 전화번호는 필수입니다.'},
       );
     }
 
-    // 이메일 중복 확인
-    final emailCheck = await pool.execute(
-      Sql.named('SELECT id FROM users WHERE email = @email'),
-      parameters: {'email': email},
-    );
+    // 5. 중복 검사 (이메일, 사용자명, 전화번호)
+    final emailCheck = await pool.execute(Sql.named('SELECT id FROM users WHERE email = @email'), parameters: {'email': email});
+    if (emailCheck.isNotEmpty) return Response.json(statusCode: 409, body: {'error': '이미 존재하는 이메일입니다.'});
 
-    if (emailCheck.isNotEmpty) {
-      return Response.json(
-        statusCode: 409,
-        body: {'error': '이미 존재하는 이메일입니다.'},
-      );
+    final usernameCheck = await pool.execute(Sql.named('SELECT id FROM users WHERE username = @username'), parameters: {'username': username});
+    if (usernameCheck.isNotEmpty) return Response.json(statusCode: 409, body: {'error': '이미 존재하는 사용자명입니다.'});
+
+    final phoneCheck = await pool.execute(Sql.named('SELECT id FROM users WHERE phone = @phone'), parameters: {'phone': phone});
+    if (phoneCheck.isNotEmpty) return Response.json(statusCode: 409, body: {'error': '이미 존재하는 전화번호입니다.'});
+
+    // 6. 파일 저장 로직
+    String? savedFilePath;
+    if (uploadedFile != null) {
+      // 프로젝트 루트의 public/uploads 폴더에 저장 (폴더가 없으면 생성해야 함)
+      final uploadDir = Directory('public/uploads');
+      if (!await uploadDir.exists()) {
+        await uploadDir.create(recursive: true);
+      }
+
+      // 파일명 충돌 방지: timestamp_파일명
+      final filename = '${DateTime.now().millisecondsSinceEpoch}_${uploadedFile.name}';
+      final filePath = p.join(uploadDir.path, filename);
+      
+      // 파일 쓰기
+      final fileOnDisk = File(filePath);
+      await fileOnDisk.writeAsBytes(await uploadedFile.readAsBytes());
+      
+      savedFilePath = filePath; // DB에 저장할 경로
     }
 
-    // 사용자명 중복 확인
-    final usernameCheck = await pool.execute(
-      Sql.named('SELECT id FROM users WHERE username = @username'),
-      parameters: {'username': username},
-    );
-
-    if (usernameCheck.isNotEmpty) {
-      return Response.json(
-        statusCode: 409,
-        body: {'error': '이미 존재하는 사용자명입니다.'},
-      );
-    }
-
-    // 전화번호 중복 확인
-    final phoneCheck = await pool.execute(
-      Sql.named('SELECT id FROM users WHERE phone = @phone'),
-      parameters: {'phone': phone},
-    );
-
-    if (phoneCheck.isNotEmpty) {
-      return Response.json(
-        statusCode: 409,
-        body: {'error': '이미 존재하는 전화번호입니다.'},
-      );
-    }
-
+    // 7. DB Insert (비밀번호 해싱 포함)
     final hashedPassword = sha256.convert(utf8.encode(password)).toString();
-
+    
     final result = await pool.execute(
       Sql.named('''
-        INSERT INTO users (email, password, username, phone, created_at)
-        VALUES (@email, @password, @username, @phone, NOW())
-        RETURNING id, email, username, phone, created_at
+        INSERT INTO users (email, password, name, username, phone, certificate_path, created_at)
+        VALUES (@email, @password, @name, @username, @phone, @certificatePath, NOW())
+        RETURNING id, email, name, username, phone, certificate_path, created_at
       '''),
       parameters: {
         'email': email,
         'password': hashedPassword,
+        'name': name,
         'username': username,
         'phone': phone,
+        'certificatePath': savedFilePath, // 파일 없으면 null 들어감
       },
     );
 
@@ -92,16 +105,15 @@ Future<Response> onRequest(RequestContext context) async {
         'user': {
           'id': user[0],
           'email': user[1],
-          'username': user[2],
-          'phone': user[3],
-          'created_at': user[4].toString(),
+          'name': user[2],
+          'username': user[3],
+          'phone': user[4],
+          'certificate_path': user[5],
         },
       },
     );
+
   } catch (e) {
-    return Response.json(
-      statusCode: 500,
-      body: {'error': '서버 오류가 발생했습니다: $e'},
-    );
+    return Response.json(statusCode: 500, body: {'error': '서버 오류: $e'});
   }
 }

@@ -17,7 +17,6 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await Provider.of<AuthProvider>(context, listen: false)
           .login(_emailCtrl.text, _passCtrl.text);
-      // 성공하면 main.dart의 Consumer가 감지하여 화면 전환
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('오류: $e')));

@@ -27,9 +27,18 @@ Future<Response> onRequest(RequestContext context) async {
 
     final hashedPassword = sha256.convert(utf8.encode(password)).toString();
 
+    // [최종 수정] SELECT 문에 certificate_path와 role 컬럼을 추가했습니다.
     final result = await pool.execute(
       Sql.named('''
-        SELECT id, email, username, phone, created_at
+        SELECT 
+          id, 
+          email, 
+          name, 
+          username, 
+          phone, 
+          created_at,
+          certificate_path,  -- << 추가: 전문가 요청 상태 확인용
+          role              -- << 추가: 전문가 역할 확인용
         FROM users
         WHERE email = @email AND password = @password
       '''),
@@ -48,6 +57,10 @@ Future<Response> onRequest(RequestContext context) async {
 
     final user = result.first;
 
+    // PostgreSQL 결과 인덱스:
+    // 0: id, 1: email, 2: name, 3: username, 4: phone, 5: created_at
+    // 6: certificate_path, 7: role
+
     return Response.json(
       statusCode: 200,
       body: {
@@ -56,14 +69,19 @@ Future<Response> onRequest(RequestContext context) async {
         'user': {
           'id': user[0],
           'email': user[1],
-          'username': user[2],
-          'phone': user[3],
-          'created_at': user[4].toString(),
+          'name': user[2],
+          'username': user[3],
+          'phone': user[4],
+          'created_at': user[5].toString(),
+          'certificate_path': user[6], // << 추가: 심사 중 플래그
+          'role': user[7],             // << 추가: 역할
         },
         'token': 'dummy_token_${user[0]}',
       },
     );
   } catch (e) {
+    // 서버 로그에 상세 에러 출력
+    print('🚨 Login Server Error: $e'); 
     return Response.json(
       statusCode: 500,
       body: {'error': '서버 오류가 발생했습니다: $e'},
